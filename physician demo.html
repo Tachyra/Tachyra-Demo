@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tachyra — Clinical Decision Support Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #12302B;
+    --ink-soft: #2C4A44;
+    --paper: #EEF0EA;
+    --paper-raised: #FFFFFF;
+    --teal: #1F6F63;
+    --amber: #B8722B;
+    --amber-soft: #F1E2CE;
+    --red: #A23E3E;
+    --red-soft: #F3DEDE;
+    --slate: #5B6560;
+    --rule: #D7DACF;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 48px 32px 96px;
+  }
+
+  header.masthead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 18px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .brand {
+    font-family: 'Fraunces', serif;
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  .brand span { color: var(--teal); }
+
+  .masthead-meta {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--slate);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .subhead {
+    font-size: 14px;
+    color: var(--slate);
+    margin: 10px 0 40px;
+    max-width: 640px;
+    line-height: 1.5;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(320px, 420px) 1fr;
+    gap: 28px;
+    align-items: start;
+  }
+
+  @media (max-width: 880px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+  }
+
+  .panel-head {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--slate);
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .panel-body { padding: 20px; }
+
+  label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-soft);
+    margin: 18px 0 6px;
+  }
+  label:first-of-type { margin-top: 0; }
+
+  input, textarea, select {
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    background: var(--paper);
+    color: var(--ink);
+  }
+
+  textarea { resize: vertical; min-height: 54px; }
+
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  .acuity-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 20px;
+    font-size: 12px;
+    color: var(--ink-soft);
+  }
+
+  button.run {
+    width: 100%;
+    margin-top: 24px;
+    padding: 13px;
+    background: var(--ink);
+    color: var(--paper);
+    border: none;
+    border-radius: 2px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  button.run:hover { background: var(--teal); }
+  button.run:disabled { background: var(--slate); cursor: wait; }
+
+  .endpoint-note {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--slate);
+    margin-top: 10px;
+  }
+
+  /* Results panel */
+  .empty-state {
+    padding: 60px 20px;
+    text-align: center;
+    color: var(--slate);
+  }
+  .empty-state .glyph {
+    font-family: 'Fraunces', serif;
+    font-size: 40px;
+    color: var(--rule);
+    margin-bottom: 10px;
+  }
+
+  .dx-item { padding: 18px 0; border-bottom: 1px solid var(--rule); }
+  .dx-item:last-child { border-bottom: none; }
+
+  .dx-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .dx-rank {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--teal);
+    letter-spacing: 0.05em;
+  }
+  .dx-name { font-family: 'Fraunces', serif; font-size: 19px; font-weight: 500; }
+  .dx-rationale { font-size: 13.5px; color: var(--ink-soft); margin-top: 6px; line-height: 1.5; }
+
+  /* Calibrated gauge — the signature element */
+  .gauge {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-top: 10px;
+  }
+  .gauge .tick {
+    height: 14px;
+    width: 6px;
+    background: var(--rule);
+    border-radius: 1px;
+  }
+  .gauge .tick.filled { background: var(--teal); }
+  .gauge .tick.filled.rank1 { background: var(--ink); }
+
+  .flags-section { margin-top: 4px; }
+  .flag-item {
+    padding: 14px 16px;
+    border-radius: 2px;
+    margin-bottom: 10px;
+    font-size: 13px;
+  }
+  .flag-item.low { background: #EAEFE7; border-left: 3px solid var(--teal); }
+  .flag-item.moderate { background: var(--amber-soft); border-left: 3px solid var(--amber); }
+  .flag-item.high { background: var(--red-soft); border-left: 3px solid var(--red); }
+  .flag-meds { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--ink-soft); margin-bottom: 4px; }
+  .flag-severity {
+    display: inline-block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 6px;
+    color: var(--slate);
+  }
+
+  .meta-strip {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--slate);
+    padding: 12px 20px;
+    border-top: 1px solid var(--rule);
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .disclaimer {
+    font-size: 11px;
+    color: var(--slate);
+    padding: 16px 20px 0;
+    line-height: 1.5;
+    border-top: 1px dashed var(--rule);
+    margin-top: 6px;
+  }
+
+  .error-box {
+    margin: 20px;
+    padding: 14px 16px;
+    background: var(--red-soft);
+    border-left: 3px solid var(--red);
+    font-size: 13px;
+    border-radius: 2px;
+  }
+
+  .spinner-line {
+    padding: 60px 20px;
+    text-align: center;
+    color: var(--slate);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="masthead">
+    <div class="brand">TACHYRA<span>·</span>DX</div>
+    <div class="masthead-meta">Physician Demo · Phase 0 Pilot</div>
+  </header>
+  <p class="subhead">Enter a case as you would in an intake note. The engine returns a ranked differential and medication-interaction flags for your review — it does not diagnose, and final clinical authority stays with you.</p>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="panel-head"><span>Patient Case</span><span id="statusDot">●</span></div>
+      <div class="panel-body">
+        <label for="complaint">Chief complaint</label>
+        <textarea id="complaint" placeholder="e.g. Progressive fatigue and joint pain over 3 weeks"></textarea>
+
+        <label for="symptoms">Symptoms (comma-separated)</label>
+        <input id="symptoms" placeholder="fatigue, bilateral joint pain, low-grade fever">
+
+        <div class="row2">
+          <div>
+            <label for="age">Age</label>
+            <input id="age" type="number" placeholder="47">
+          </div>
+          <div>
+            <label for="sex">Sex</label>
+            <select id="sex">
+              <option value="">Unspecified</option>
+              <option value="female">Female</option>
+              <option value="male">Male</option>
+            </select>
+          </div>
+        </div>
+
+        <label for="meds">Current medications (comma-separated)</label>
+        <input id="meds" placeholder="lisinopril 10mg daily, ibuprofen 400mg PRN">
+
+        <label for="history">Relevant history (comma-separated)</label>
+        <input id="history" placeholder="hypertension, family history of autoimmune disease">
+
+        <label for="vitals">Vitals (optional, freeform)</label>
+        <input id="vitals" placeholder="temp 99.8F, BP 138/86, HR 82">
+
+        <div class="acuity-toggle">
+          <input type="checkbox" id="highAcuity" style="width:auto;">
+          <label for="highAcuity" style="margin:0;">Escalate to high-acuity model</label>
+        </div>
+
+        <button class="run" id="runBtn">Run differential</button>
+        <div class="endpoint-note">→ POST <span id="endpointLabel">http://localhost:8000/diagnose</span></div>
+      </div>
+    </div>
+
+    <div class="panel" id="resultsPanel">
+      <div class="panel-head"><span>Differential &amp; Medication Review</span><span id="resultMeta"></span></div>
+      <div id="resultsBody">
+        <div class="empty-state">
+          <div class="glyph">§</div>
+          Results will appear here once a case is submitted.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const ENDPOINT = "http://localhost:8000/diagnose";
+document.getElementById('endpointLabel').textContent = ENDPOINT;
+
+const runBtn = document.getElementById('runBtn');
+const resultsBody = document.getElementById('resultsBody');
+const resultMeta = document.getElementById('resultMeta');
+const statusDot = document.getElementById('statusDot');
+
+function splitList(value) {
+  return value.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function severityRank(sev) {
+  return { high: 3, moderate: 2, low: 1 }[sev] || 0;
+}
+
+function renderGauge(rank, total) {
+  const filled = Math.max(1, total - rank + 1);
+  let html = '<div class="gauge">';
+  for (let i = 0; i < total; i++) {
+    const isFilled = i < filled;
+    const cls = isFilled ? (rank === 1 ? 'tick filled rank1' : 'tick filled') : 'tick';
+    html += `<div class="${cls}"></div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderResults(data) {
+  if (data.error) {
+    resultsBody.innerHTML = `<div class="error-box"><strong>Could not parse model output.</strong><br>${data.error}</div>`;
+    return;
+  }
+
+  const diffs = data.differentials || [];
+  const flags = (data.medication_flags || []).slice().sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
+
+  let html = '<div class="panel-body">';
+
+  if (diffs.length) {
+    diffs.forEach(d => {
+      html += `
+        <div class="dx-item">
+          <div class="dx-top">
+            <span class="dx-name">${d.condition}</span>
+            <span class="dx-rank">RANK ${d.likelihood_rank}</span>
+          </div>
+          ${renderGauge(d.likelihood_rank, diffs.length)}
+          <div class="dx-rationale">${d.rationale}</div>
+        </div>`;
+    });
+  }
+
+  if (data.insufficient_data_note) {
+    html += `<div class="disclaimer"><strong>Note:</strong> ${data.insufficient_data_note}</div>`;
+  }
+
+  if (flags.length) {
+    html += '<div class="flags-section" style="margin-top:24px;"><label style="margin-bottom:10px;">Medication Flags</label>';
+    flags.forEach(f => {
+      html += `
+        <div class="flag-item ${f.severity}">
+          <div class="flag-meds">${(f.medications_involved || []).join(' · ')}</div>
+          <div>${f.concern}</div>
+          <div class="flag-severity">${f.severity} severity</div>
+        </div>`;
+    });
+    html += '</div>';
+  }
+
+  html += `<div class="disclaimer">This output ranks possibilities for physician review only. It is not a diagnosis and does not replace clinical judgment.</div>`;
+  html += '</div>';
+
+  if (data._meta) {
+    resultMeta.textContent = `${data._meta.model} · ${data._meta.input_tokens}→${data._meta.output_tokens} tok`;
+  }
+
+  resultsBody.innerHTML = html;
+}
+
+runBtn.addEventListener('click', async () => {
+  const payload = {
+    chief_complaint: document.getElementById('complaint').value.trim(),
+    symptoms: splitList(document.getElementById('symptoms').value),
+    age: document.getElementById('age').value ? parseInt(document.getElementById('age').value) : null,
+    sex: document.getElementById('sex').value || null,
+    current_medications: splitList(document.getElementById('meds').value),
+    relevant_history: splitList(document.getElementById('history').value),
+    vitals: document.getElementById('vitals').value.trim() ? { note: document.getElementById('vitals').value.trim() } : null,
+    high_acuity: document.getElementById('highAcuity').checked
+  };
+
+  if (!payload.chief_complaint) {
+    resultsBody.innerHTML = '<div class="error-box">Enter a chief complaint before running the case.</div>';
+    return;
+  }
+
+  runBtn.disabled = true;
+  runBtn.textContent = 'Running…';
+  statusDot.style.color = '#B8722B';
+  resultsBody.innerHTML = '<div class="spinner-line">Contacting diagnostic engine…</div>';
+
+  try {
+    const res = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(`Server responded ${res.status}`);
+    const data = await res.json();
+    renderResults(data);
+    statusDot.style.color = '#1F6F63';
+  } catch (err) {
+    resultsBody.innerHTML = `<div class="error-box"><strong>Could not reach the diagnostic engine.</strong><br>${err.message}<br><br>Make sure backend.py is running at ${ENDPOINT}.</div>`;
+    statusDot.style.color = '#A23E3E';
+  } finally {
+    runBtn.disabled = false;
+    runBtn.textContent = 'Run differential';
+  }
+});
+</script>
+</body>
+</html>
