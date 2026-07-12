@@ -1,4 +1,3 @@
 fastapi
 uvicorn
 anthropic
-cat requirements.txt
