@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tachyra — Clinical Decision Support Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #12302B;
+    --ink-soft: #2C4A44;
+    --paper: #EEF0EA;
+    --paper-raised: #FFFFFF;
+    --teal: #1F6F63;
+    --amber: #B8722B;
+    --amber-soft: #F1E2CE;
+    --red: #A23E3E;
+    --red-soft: #F3DEDE;
+    --slate: #5B6560;
+    --rule: #D7DACF;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 48px 32px 96px;
+  }
+
+  header.masthead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 18px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .brand {
+    font-family: 'Fraunces', serif;
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  .brand span { color: var(--teal); }
+
+  .masthead-meta {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--slate);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .subhead {
+    font-size: 14px;
+    color: var(--slate);
+    margin: 10px 0 40px;
+    max-width: 640px;
+    line-height: 1.5;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(320px, 420px) 1fr;
+    gap: 28px;
+    align-items: start;
+  }
+
+  @media (max-width: 880px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+  }
+
+  .panel-head {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--slate);
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .panel-body { padding: 20px; }
+
+  label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-soft);
+    margin: 18px 0 6px;
+  }
+  label:first-of-type { margin-top: 0; }
+
+  .section-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--teal);
+    margin: 26px 0 4px;
+    padding-top: 14px;
+    border-top: 1px solid var(--rule);
+  }
+  .section-label:first-of-type { border-top: none; padding-top: 0; margin-top: 18px; }
+
+  .optional-tag {
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--slate);
+    font-weight: 400;
+  }
+
+  .ros-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 10px;
+    margin-top: 8px;
+  }
+  .ros-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    font-weight: 400;
+    margin: 0;
+    cursor: pointer;
+  }
+  .ros-item input { width: auto; }
+
+  .role-toggle {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+  }
+  .role-btn {
+    flex: 1;
+    min-width: 80px;
+    padding: 9px 6px;
+    border: 1px solid var(--rule);
+    background: var(--paper);
+    color: var(--ink-soft);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-radius: 2px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .role-btn:hover { border-color: var(--teal); }
+  .role-btn.active {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--paper);
+  }
+
+  .field-note {
+    font-size: 11px;
+    color: var(--amber);
+    margin-top: 4px;
+    font-style: italic;
+  }
+
+  input:disabled, input.disabled-field,
+  textarea:disabled, textarea.disabled-field {
+    background: var(--rule);
+    color: var(--slate);
+    cursor: not-allowed;
+  }
+
+  .autocomplete-wrap { position: relative; }
+
+  .suggestions {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    border-top: none;
+    border-radius: 0 0 2px 2px;
+    max-height: 220px;
+    overflow-y: auto;
+    z-index: 20;
+    box-shadow: 0 4px 10px rgba(18,48,43,0.08);
+  }
+  .suggestions.open { display: block; }
+
+  .suggestion-item {
+    padding: 9px 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-soft);
+    cursor: pointer;
+    border-bottom: 1px solid var(--rule);
+  }
+  .suggestion-item:last-child { border-bottom: none; }
+  .suggestion-item:hover, .suggestion-item.highlighted {
+    background: var(--amber-soft);
+    color: var(--ink);
+  }
+  .suggestion-loading {
+    padding: 9px 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--slate);
+  }
+
+  input, textarea, select {
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    background: var(--paper);
+    color: var(--ink);
+  }
+
+  textarea { resize: vertical; min-height: 54px; }
+
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  .row-compact {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    margin-top: 18px;
+  }
+  .row-compact label { margin-top: 0; }
+
+  .field-compact { flex: 0 0 92px; }
+  .field-compact-md { flex: 0 0 130px; }
+  .row-compact > div:not(.field-compact):not(.field-compact-md) { flex: 1; }
+
+  .vitals-strip {
+    display: flex;
+    gap: 10px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+  }
+  .vitals-strip .field-compact { flex: 0 0 84px; }
+  .vitals-strip label {
+    margin: 0 0 5px;
+    font-size: 10.5px;
+    color: var(--slate);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .vitals-strip input {
+    text-align: center;
+    padding: 8px 4px;
+  }
+
+  .acuity-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 20px;
+    font-size: 12px;
+    color: var(--ink-soft);
+  }
+
+  button.run {
+    width: 100%;
+    margin-top: 24px;
+    padding: 13px;
+    background: var(--ink);
+    color: var(--paper);
+    border: none;
+    border-radius: 2px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  button.run:hover { background: var(--teal); }
+  button.run:disabled { background: var(--slate); cursor: wait; }
+
+  .endpoint-note {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--slate);
+    margin-top: 10px;
+  }
+
+  /* Results panel */
+  .empty-state {
+    padding: 60px 20px;
+    text-align: center;
+    color: var(--slate);
+  }
+  .empty-state .glyph {
+    font-family: 'Fraunces', serif;
+    font-size: 40px;
+    color: var(--rule);
+    margin-bottom: 10px;
+  }
+
+  .dx-item { padding: 18px 0; border-bottom: 1px solid var(--rule); }
+  .dx-item:last-child { border-bottom: none; }
+
+  .dx-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .dx-rank {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--teal);
+    letter-spacing: 0.05em;
+  }
+  .dx-name { font-family: 'Fraunces', serif; font-size: 19px; font-weight: 500; }
+  .dx-rationale { font-size: 13.5px; color: var(--ink-soft); margin-top: 6px; line-height: 1.5; }
+
+  /* Calibrated gauge — the signature element */
+  .gauge {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-top: 10px;
+  }
+  .gauge .tick {
+    height: 14px;
+    width: 6px;
+    background: var(--rule);
+    border-radius: 1px;
+  }
+  .gauge .tick.filled { background: var(--teal); }
+  .gauge .tick.filled.rank1 { background: var(--ink); }
+
+  .flags-section { margin-top: 4px; }
+  .flag-item {
+    padding: 14px 16px;
+    border-radius: 2px;
+    margin-bottom: 10px;
+    font-size: 13px;
+  }
+  .flag-item.low { background: #EAEFE7; border-left: 3px solid var(--teal); }
+  .flag-item.moderate { background: var(--amber-soft); border-left: 3px solid var(--amber); }
+  .flag-item.high { background: var(--red-soft); border-left: 3px solid var(--red); }
+  .flag-meds { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--ink-soft); margin-bottom: 4px; }
+  .flag-severity {
+    display: inline-block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 6px;
+    color: var(--slate);
+  }
+
+  .meta-strip {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--slate);
+    padding: 12px 20px;
+    border-top: 1px solid var(--rule);
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .disclaimer {
+    font-size: 11px;
+    color: var(--slate);
+    padding: 16px 20px 0;
+    line-height: 1.5;
+    border-top: 1px dashed var(--rule);
+    margin-top: 6px;
+  }
+
+  .error-box {
+    margin: 20px;
+    padding: 14px 16px;
+    background: var(--red-soft);
+    border-left: 3px solid var(--red);
+    font-size: 13px;
+    border-radius: 2px;
+  }
+
+  .spinner-line {
+    padding: 60px 20px;
+    text-align: center;
+    color: var(--slate);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="masthead">
+    <div class="brand">TACHYRA<span>·</span>DX</div>
+    <div class="masthead-meta">Physician Demo · Phase 0 Pilot</div>
+  </header>
+  <p class="subhead">Enter a case as you would in an intake note. The engine returns a ranked differential and medication-interaction flags for your review — it does not diagnose, and final clinical authority stays with you.</p>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="panel-head"><span>Patient Case</span><span id="statusDot">●</span></div>
+      <div class="panel-body">
+        <div class="section-label" style="margin-top:0; padding-top:0; border-top:none;">Submitted By</div>
+        <div class="role-toggle" id="roleToggle">
+          <button type="button" class="role-btn active" data-role="physician">Physician</button>
+          <button type="button" class="role-btn" data-role="nurse_ma">Nurse / MA</button>
+          <button type="button" class="role-btn" data-role="patient">Patient</button>
+          <button type="button" class="role-btn" data-role="other">Other</button>
+        </div>
+
+        <div class="section-label">Patient Identification</div>
+        <div class="row2">
+          <div>
+            <label for="patientName">Patient name</label>
+            <input id="patientName" placeholder="Disabled in this demo" disabled class="disabled-field">
+          </div>
+          <div>
+            <label for="patientContact">Contact information</label>
+            <input id="patientContact" placeholder="Disabled in this demo" disabled class="disabled-field">
+          </div>
+        </div>
+        <div class="field-note">Disabled in this demo. Patient name and contact information are protected health information (PHI) under HIPAA — collecting them requires HIPAA-compliant hosting and a signed Business Associate Agreement, neither of which is in place for this environment yet. This demo runs on clinical details only; identifying fields will be enabled once the production infrastructure is certified.</div>
+
+        <label for="complaint" style="margin-top:20px;">Chief complaint</label>
+        <textarea id="complaint" placeholder="e.g. Progressive fatigue and joint pain over 3 weeks"></textarea>
+
+        <label for="symptoms">Symptoms <span class="optional-tag">(patient-reported)</span></label>
+        <input id="symptoms" placeholder="fatigue, joint pain, low-grade fever">
+
+        <label for="signs">Signs <span class="optional-tag">(clinician-observed)</span></label>
+        <input id="signs" placeholder="tachycardia, pallor, 2+ pitting edema">
+
+        <div class="row-compact">
+          <div class="field-compact">
+            <label for="age">Age</label>
+            <input id="age" type="number" placeholder="47">
+          </div>
+          <div class="field-compact-md">
+            <label for="sex">Sex</label>
+            <select id="sex">
+              <option value="">Unspecified</option>
+              <option value="female">Female</option>
+              <option value="male">Male</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="section-label">Symptom Characteristics</div>
+
+        <div class="row2">
+          <div>
+            <label for="onset">Onset</label>
+            <select id="onset">
+              <option value="">Not specified</option>
+              <option value="sudden">Sudden</option>
+              <option value="gradual">Gradual</option>
+              <option value="chronic">Chronic</option>
+            </select>
+          </div>
+          <div>
+            <label for="severity">Severity</label>
+            <select id="severity">
+              <option value="">Not specified</option>
+              <option value="mild">Mild</option>
+              <option value="moderate">Moderate</option>
+              <option value="severe">Severe</option>
+            </select>
+          </div>
+        </div>
+
+        <label for="duration">Duration</label>
+        <input id="duration" placeholder="e.g. 3 weeks">
+
+        <div class="row2">
+          <div>
+            <label for="aggravating">Worse with</label>
+            <input id="aggravating" placeholder="e.g. exertion">
+          </div>
+          <div>
+            <label for="alleviating">Better with</label>
+            <input id="alleviating" placeholder="e.g. rest">
+          </div>
+        </div>
+
+        <div class="section-label">Review of Systems <span class="optional-tag">(check any positive findings)</span></div>
+        <div class="ros-grid" id="rosGrid">
+          <label class="ros-item"><input type="checkbox" value="fever"> Fever</label>
+          <label class="ros-item"><input type="checkbox" value="chills"> Chills</label>
+          <label class="ros-item"><input type="checkbox" value="weight loss"> Weight loss</label>
+          <label class="ros-item"><input type="checkbox" value="night sweats"> Night sweats</label>
+          <label class="ros-item"><input type="checkbox" value="chest pain"> Chest pain</label>
+          <label class="ros-item"><input type="checkbox" value="palpitations"> Palpitations</label>
+          <label class="ros-item"><input type="checkbox" value="shortness of breath"> Shortness of breath</label>
+          <label class="ros-item"><input type="checkbox" value="cough"> Cough</label>
+          <label class="ros-item"><input type="checkbox" value="nausea"> Nausea</label>
+          <label class="ros-item"><input type="checkbox" value="vomiting"> Vomiting</label>
+          <label class="ros-item"><input type="checkbox" value="abdominal pain"> Abdominal pain</label>
+          <label class="ros-item"><input type="checkbox" value="joint pain"> Joint pain</label>
+          <label class="ros-item"><input type="checkbox" value="muscle weakness"> Muscle weakness</label>
+          <label class="ros-item"><input type="checkbox" value="headache"> Headache</label>
+          <label class="ros-item"><input type="checkbox" value="dizziness"> Dizziness</label>
+          <label class="ros-item"><input type="checkbox" value="numbness"> Numbness</label>
+          <label class="ros-item"><input type="checkbox" value="rash"> Rash</label>
+          <label class="ros-item"><input type="checkbox" value="sleep disturbance"> Sleep disturbance</label>
+        </div>
+
+        <div class="section-label">Vitals <span class="optional-tag">(optional)</span></div>
+        <div class="vitals-strip">
+          <div class="field-compact">
+            <label for="tempF">Temp °F</label>
+            <input id="tempF" type="number" step="0.1" placeholder="98.6">
+          </div>
+          <div class="field-compact">
+            <label for="bpSys">BP Sys</label>
+            <input id="bpSys" type="number" placeholder="120">
+          </div>
+          <div class="field-compact">
+            <label for="bpDia">BP Dia</label>
+            <input id="bpDia" type="number" placeholder="80">
+          </div>
+          <div class="field-compact">
+            <label for="hr">HR</label>
+            <input id="hr" type="number" placeholder="72">
+          </div>
+          <div class="field-compact">
+            <label for="rr">RR</label>
+            <input id="rr" type="number" placeholder="16">
+          </div>
+          <div class="field-compact">
+            <label for="o2sat">O2 Sat %</label>
+            <input id="o2sat" type="number" placeholder="98">
+          </div>
+        </div>
+
+        <div class="section-label">Exam &amp; Workup <span class="optional-tag">(optional)</span></div>
+        <label for="examFindings">Physical exam findings</label>
+        <textarea id="examFindings" placeholder="e.g. Bilateral MCP/PIP tenderness and swelling, no rash noted"></textarea>
+        <div class="field-note" id="examNote" style="display:none;">Not applicable for patient-submitted intake — a clinician must complete this field.</div>
+
+        <label for="labsImaging">Labs / imaging results</label>
+        <textarea id="labsImaging" placeholder="e.g. ESR 42, CRP 18, CBC WNL"></textarea>
+
+        <div class="section-label">History</div>
+        <label for="meds">Current medications</label>
+        <div class="autocomplete-wrap">
+          <input id="meds" placeholder="Start typing a drug name, e.g. lisinop..." autocomplete="off">
+          <div class="suggestions" id="medsSuggestions"></div>
+        </div>
+        <div class="field-note" id="medsNote">Suggestions from RxNorm (NIH National Library of Medicine). Select from the list or type freely — separate multiple drugs with commas.</div>
+
+        <label for="allergies">Allergies</label>
+        <input id="allergies" placeholder="e.g. penicillin (rash)">
+
+        <label for="history">Relevant medical history (comma-separated)</label>
+        <input id="history" placeholder="hypertension, prior thyroid disease">
+
+        <label for="familyHistory">Family history</label>
+        <input id="familyHistory" placeholder="e.g. mother with rheumatoid arthritis">
+
+        <label for="socialHistory">Social history</label>
+        <input id="socialHistory" placeholder="e.g. non-smoker, occasional alcohol, works construction">
+
+        <div class="acuity-toggle">
+          <input type="checkbox" id="highAcuity" style="width:auto;">
+          <label for="highAcuity" style="margin:0;">Escalate to high-acuity model</label>
+        </div>
+
+        <button class="run" id="runBtn">Run differential</button>
+        <div class="endpoint-note">→ POST <span id="endpointLabel">http://localhost:8000/diagnose</span></div>
+      </div>
+    </div>
+
+    <div class="panel" id="resultsPanel">
+      <div class="panel-head"><span>Differential &amp; Medication Review</span><span id="resultMeta"></span></div>
+      <div id="resultsBody">
+        <div class="empty-state">
+          <div class="glyph">§</div>
+          Results will appear here once a case is submitted.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const ENDPOINT = "https://tachyra-demo.onrender.com/diagnose";
+document.getElementById('endpointLabel').textContent = ENDPOINT;
+
+const runBtn = document.getElementById('runBtn');
+const resultsBody = document.getElementById('resultsBody');
+const resultMeta = document.getElementById('resultMeta');
+const statusDot = document.getElementById('statusDot');
+
+function splitList(value) {
+  return value.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function severityRank(sev) {
+  return { high: 3, moderate: 2, low: 1 }[sev] || 0;
+}
+
+function renderGauge(rank, total) {
+  const filled = Math.max(1, total - rank + 1);
+  let html = '<div class="gauge">';
+  for (let i = 0; i < total; i++) {
+    const isFilled = i < filled;
+    const cls = isFilled ? (rank === 1 ? 'tick filled rank1' : 'tick filled') : 'tick';
+    html += `<div class="${cls}"></div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderResults(data) {
+  if (data.error) {
+    resultsBody.innerHTML = `<div class="error-box"><strong>Could not parse model output.</strong><br>${data.error}</div>`;
+    return;
+  }
+
+  const diffs = data.differentials || [];
+  const flags = (data.medication_flags || []).slice().sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
+
+  let html = '<div class="panel-body">';
+
+  if (diffs.length) {
+    diffs.forEach(d => {
+      html += `
+        <div class="dx-item">
+          <div class="dx-top">
+            <span class="dx-name">${d.condition}</span>
+            <span class="dx-rank">RANK ${d.likelihood_rank}</span>
+          </div>
+          ${renderGauge(d.likelihood_rank, diffs.length)}
+          <div class="dx-rationale">${d.rationale}</div>
+        </div>`;
+    });
+  }
+
+  if (data.insufficient_data_note) {
+    html += `<div class="disclaimer"><strong>Note:</strong> ${data.insufficient_data_note}</div>`;
+  }
+
+  if (flags.length) {
+    html += '<div class="flags-section" style="margin-top:24px;"><label style="margin-bottom:10px;">Medication Flags</label>';
+    flags.forEach(f => {
+      html += `
+        <div class="flag-item ${f.severity}">
+          <div class="flag-meds">${(f.medications_involved || []).join(' · ')}</div>
+          <div>${f.concern}</div>
+          <div class="flag-severity">${f.severity} severity</div>
+        </div>`;
+    });
+    html += '</div>';
+  }
+
+  html += `<div class="disclaimer">This output ranks possibilities for physician review only. It is not a diagnosis and does not replace clinical judgment.</div>`;
+  html += '</div>';
+
+  if (data._meta) {
+    const roleLabel = { physician: 'Physician', nurse_ma: 'Nurse/MA', patient: 'Patient', other: 'Other' }[data._meta.submitted_by] || data._meta.submitted_by;
+    resultMeta.textContent = `${roleLabel} intake · ${data._meta.model} · ${data._meta.input_tokens}→${data._meta.output_tokens} tok`;
+  }
+
+  resultsBody.innerHTML = html;
+}
+
+// --- Medication autocomplete (RxNorm / NIH RxTerms) ---
+const medsInput = document.getElementById('meds');
+const medsSuggestions = document.getElementById('medsSuggestions');
+let medsDebounceTimer = null;
+let highlightedIndex = -1;
+
+function currentSegment() {
+  const parts = medsInput.value.split(',');
+  return parts[parts.length - 1].trim();
+}
+
+function replaceCurrentSegment(newValue) {
+  const parts = medsInput.value.split(',');
+  parts[parts.length - 1] = ' ' + newValue;
+  medsInput.value = parts.map((p, i) => i === 0 ? p.trim() : p).join(', ').replace(/^,\s*/, '');
+  // Rebuild cleanly to avoid leading comma edge cases
+  const cleaned = parts.map(p => p.trim()).filter(Boolean);
+  medsInput.value = cleaned.join(', ') + ', ';
+}
+
+function closeSuggestions() {
+  medsSuggestions.classList.remove('open');
+  medsSuggestions.innerHTML = '';
+  highlightedIndex = -1;
+}
+
+function renderSuggestions(items) {
+  if (!items.length) { closeSuggestions(); return; }
+  medsSuggestions.innerHTML = items.map((name, i) =>
+    `<div class="suggestion-item" data-index="${i}">${name}</div>`
+  ).join('');
+  medsSuggestions.classList.add('open');
+  Array.from(medsSuggestions.querySelectorAll('.suggestion-item')).forEach(el => {
+    el.addEventListener('click', () => {
+      replaceCurrentSegment(el.textContent);
+      closeSuggestions();
+      medsInput.focus();
+    });
+  });
+}
+
+medsInput.addEventListener('input', () => {
+  clearTimeout(medsDebounceTimer);
+  const term = currentSegment();
+  if (term.length < 2) { closeSuggestions(); return; }
+
+  medsDebounceTimer = setTimeout(async () => {
+    try {
+      const res = await fetch(`https://clinicaltables.nlm.nih.gov/api/rxterms/v3/search?terms=${encodeURIComponent(term)}&maxList=8`);
+      if (!res.ok) { closeSuggestions(); return; }
+      const data = await res.json();
+      // Response shape: [totalResults, codes, extraFields, displayStrings]
+      const displayStrings = data[3] || [];
+      const names = displayStrings.map(item => Array.isArray(item) ? item[0] : item).filter(Boolean);
+      renderSuggestions(names);
+    } catch (err) {
+      closeSuggestions();
+    }
+  }, 300);
+});
+
+medsInput.addEventListener('blur', () => {
+  // Small delay so a click on a suggestion registers before the list closes
+  setTimeout(closeSuggestions, 150);
+});
+
+medsInput.addEventListener('keydown', (e) => {
+  const items = medsSuggestions.querySelectorAll('.suggestion-item');
+  if (!items.length) return;
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    highlightedIndex = Math.min(highlightedIndex + 1, items.length - 1);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    highlightedIndex = Math.max(highlightedIndex - 1, 0);
+  } else if (e.key === 'Enter' && highlightedIndex >= 0) {
+    e.preventDefault();
+    replaceCurrentSegment(items[highlightedIndex].textContent);
+    closeSuggestions();
+    return;
+  } else {
+    return;
+  }
+
+  items.forEach((el, i) => el.classList.toggle('highlighted', i === highlightedIndex));
+});
+
+let selectedRole = 'physician';
+const roleButtons = document.querySelectorAll('.role-btn');
+const examField = document.getElementById('examFindings');
+const examNote = document.getElementById('examNote');
+
+roleButtons.forEach(btn => {
+  btn.addEventListener('click', () => {
+    roleButtons.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    selectedRole = btn.dataset.role;
+
+    if (selectedRole === 'patient') {
+      examField.disabled = true;
+      examField.classList.add('disabled-field');
+      examField.value = '';
+      examNote.style.display = 'block';
+    } else {
+      examField.disabled = false;
+      examField.classList.remove('disabled-field');
+      examNote.style.display = 'none';
+    }
+  });
+});
+
+runBtn.addEventListener('click', async () => {
+  const checkedROS = Array.from(document.querySelectorAll('#rosGrid input[type="checkbox"]:checked')).map(el => el.value);
+
+  function numOrNull(id) {
+    const v = document.getElementById(id).value;
+    return v !== '' ? Number(v) : null;
+  }
+
+  const payload = {
+    chief_complaint: document.getElementById('complaint').value.trim(),
+    submitted_by: selectedRole,
+    symptoms: splitList(document.getElementById('symptoms').value),
+    signs: splitList(document.getElementById('signs').value),
+    age: numOrNull('age'),
+    sex: document.getElementById('sex').value || null,
+
+    onset: document.getElementById('onset').value || null,
+    duration: document.getElementById('duration').value.trim() || null,
+    severity: document.getElementById('severity').value || null,
+    aggravating_factors: document.getElementById('aggravating').value.trim() || null,
+    alleviating_factors: document.getElementById('alleviating').value.trim() || null,
+
+    review_of_systems: checkedROS,
+
+    temp_f: numOrNull('tempF'),
+    bp_systolic: numOrNull('bpSys'),
+    bp_diastolic: numOrNull('bpDia'),
+    heart_rate: numOrNull('hr'),
+    resp_rate: numOrNull('rr'),
+    o2_sat: numOrNull('o2sat'),
+
+    physical_exam_findings: document.getElementById('examFindings').value.trim() || null,
+    labs_imaging: document.getElementById('labsImaging').value.trim() || null,
+
+    current_medications: splitList(document.getElementById('meds').value),
+    allergies: document.getElementById('allergies').value.trim() || null,
+    relevant_history: splitList(document.getElementById('history').value),
+    family_history: document.getElementById('familyHistory').value.trim() || null,
+    social_history: document.getElementById('socialHistory').value.trim() || null,
+
+    high_acuity: document.getElementById('highAcuity').checked
+  };
+
+  if (!payload.chief_complaint) {
+    resultsBody.innerHTML = '<div class="error-box">Enter a chief complaint before running the case.</div>';
+    return;
+  }
+
+  runBtn.disabled = true;
+  runBtn.textContent = 'Running…';
+  statusDot.style.color = '#B8722B';
+  resultsBody.innerHTML = '<div class="spinner-line">Contacting diagnostic engine…</div>';
+
+  try {
+    const res = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(`Server responded ${res.status}`);
+    const data = await res.json();
+    renderResults(data);
+    statusDot.style.color = '#1F6F63';
+  } catch (err) {
+    resultsBody.innerHTML = `<div class="error-box"><strong>Could not reach the diagnostic engine.</strong><br>${err.message}<br><br>Make sure backend.py is running at ${ENDPOINT}.</div>`;
+    statusDot.style.color = '#A23E3E';
+  } finally {
+    runBtn.disabled = false;
+    runBtn.textContent = 'Run differential';
+  }
+});
+</script>
+</body>
+</html>
