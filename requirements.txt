@@ -2,3 +2,4 @@ fastapi
 uvicorn
 anthropic
 psycopg2-binary
+requests
