@@ -2,7 +2,17 @@
 Tachyra Diagnostics - Physician Demo Backend
 Wraps tachyra_dx_engine.py behind a small FastAPI server so the browser-side
 demo never touches the API key directly.
+
+Also handles demo access: subscribers get a unique code (generated and
+stored server-side, in Postgres) instead of a code hardcoded in page JS.
 """
+import os
+import secrets
+import re
+from datetime import datetime, timezone
+
+import psycopg2
+import psycopg2.extras
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -18,6 +28,145 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------------------------------------------------------------------------
+# Database setup (Render Postgres)
+# ---------------------------------------------------------------------------
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+
+def get_db_connection():
+    if not DATABASE_URL:
+        raise HTTPException(
+            status_code=500,
+            detail="DATABASE_URL is not configured on the server.",
+        )
+    # Render's internal URL sometimes uses postgres:// which psycopg2 accepts fine,
+    # but we normalize just in case something upstream expects postgresql://
+    url = DATABASE_URL
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    return psycopg2.connect(url)
+
+
+def init_db():
+    """Create the subscribers table if it doesn't exist yet. Safe to run every startup."""
+    if not DATABASE_URL:
+        print("WARNING: DATABASE_URL not set. /subscribe and /verify-code will fail until it is.")
+        return
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS subscribers (
+                        id SERIAL PRIMARY KEY,
+                        email TEXT UNIQUE NOT NULL,
+                        code TEXT UNIQUE NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        last_used_at TIMESTAMPTZ,
+                        use_count INTEGER NOT NULL DEFAULT 0
+                    );
+                    """
+                )
+    finally:
+        conn.close()
+
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
+
+
+# ---------------------------------------------------------------------------
+# Subscribe / verify-code endpoints
+# ---------------------------------------------------------------------------
+
+EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def generate_code() -> str:
+    return "TCH-" + secrets.token_hex(4).upper()
+
+
+class SubscribeRequest(BaseModel):
+    email: str
+
+
+class SubscribeResponse(BaseModel):
+    code: str
+
+
+class VerifyCodeRequest(BaseModel):
+    code: str
+
+
+class VerifyCodeResponse(BaseModel):
+    valid: bool
+
+
+@app.post("/subscribe", response_model=SubscribeResponse)
+def subscribe(req: SubscribeRequest):
+    email = req.email.strip().lower()
+    if not EMAIL_PATTERN.match(email):
+        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
+
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # If this email already subscribed, return their existing code
+                # instead of creating a duplicate one.
+                cur.execute("SELECT code FROM subscribers WHERE email = %s;", (email,))
+                existing = cur.fetchone()
+                if existing:
+                    return {"code": existing["code"]}
+
+                # Generate a unique code, retrying on the rare collision.
+                for _ in range(5):
+                    code = generate_code()
+                    try:
+                        cur.execute(
+                            "INSERT INTO subscribers (email, code) VALUES (%s, %s);",
+                            (email, code),
+                        )
+                        return {"code": code}
+                    except psycopg2.errors.UniqueViolation:
+                        conn.rollback()
+                        continue
+                raise HTTPException(status_code=500, detail="Could not generate a unique code. Please try again.")
+    finally:
+        conn.close()
+
+
+@app.post("/verify-code", response_model=VerifyCodeResponse)
+def verify_code(req: VerifyCodeRequest):
+    code = req.code.strip().upper()
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM subscribers WHERE code = %s;", (code,))
+                row = cur.fetchone()
+                if not row:
+                    return {"valid": False}
+                cur.execute(
+                    """
+                    UPDATE subscribers
+                    SET last_used_at = %s, use_count = use_count + 1
+                    WHERE id = %s;
+                    """,
+                    (datetime.now(timezone.utc), row[0]),
+                )
+                return {"valid": True}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Existing diagnose endpoint (unchanged)
+# ---------------------------------------------------------------------------
 
 class CaseRequest(BaseModel):
     chief_complaint: str
