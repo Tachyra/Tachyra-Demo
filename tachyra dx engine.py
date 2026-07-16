@@ -409,4 +409,4 @@ if __name__ == "__main__":
     )
 
     output = run_dx_engine(test_case)
-    print(json.dumps(output, indent=2))
+    print(json.dumps(output, indent=
