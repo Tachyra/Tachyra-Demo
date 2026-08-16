@@ -37,7 +37,14 @@ def fetch_drug_facts(drug_name: str, timeout: float = 4.0) -> Optional[dict]:
     for that medication and the physician is told which medications lacked
     verified label data.
     """
-    name_only = re.split(r'\d', drug_name)[0].strip().rstrip(',').strip()
+    # Strip dosage-form descriptors the RxNorm/RxTerms autocomplete appends
+    # to selected medication names (e.g. "ELIQUIS (Oral Pill)"), and the
+    # " — Frequency" suffix this app appends when a dosing frequency was
+    # selected - neither exists in FDA's brand_name/generic_name fields, so
+    # leaving either in silently breaks lookups for real medications.
+    without_freq = drug_name.split('—')[0]
+    without_form = re.sub(r'\s*\([^)]*\)\s*', ' ', without_freq)
+    name_only = re.split(r'\d', without_form)[0].strip().rstrip('.,').strip()
     if not name_only:
         return None
 
@@ -59,14 +66,16 @@ def fetch_drug_facts(drug_name: str, timeout: float = 4.0) -> Optional[dict]:
             return None
         label = results[0]
 
-        def first_or_none(field_name: str, max_chars: int = 700) -> Optional[str]:
+        def first_or_none(field_name: str, max_chars: Optional[int] = 700) -> Optional[str]:
             val = label.get(field_name)
-            return val[0][:max_chars] if val else None
+            if not val:
+                return None
+            return val[0][:max_chars] if max_chars is not None else val[0]
 
         facts = {
             "queried_as": name_only,
             "active_ingredient": first_or_none("active_ingredient"),
-            "inactive_ingredient": first_or_none("inactive_ingredient"),
+            "inactive_ingredient": first_or_none("inactive_ingredient", max_chars=None),
             "warnings": first_or_none("boxed_warning") or first_or_none("warnings"),
             "drug_interactions": first_or_none("drug_interactions"),
             "adverse_reactions": first_or_none("adverse_reactions"),
@@ -134,6 +143,15 @@ for shared INACTIVE ingredients (excipients, fillers, dyes, preservatives, commo
 as lactose or gluten) that could matter given the patient's documented allergies or sensitivities. \
 Flag each such duplication explicitly, grounded in documented pharmacology, and label whether it \
 is an active-ingredient or inactive-ingredient duplication.
+- Separately from ingredient duplication, check the patient's current medications for drugs that \
+are documented to RAISE serum potassium indirectly, even though potassium is not an ingredient - \
+including but not limited to ACE inhibitors, ARBs, potassium-sparing diuretics (e.g. \
+spironolactone, amiloride, triamterene), and NSAIDs. If the patient is also on a potassium \
+supplement or any potassium-containing product, flag this combination explicitly as a \
+hyperkalemia risk, grounded in documented pharmacology, and state the mechanism (e.g. "reduced \
+renal potassium excretion") in the concern field. Elevate the severity when the patient has \
+cardiac history, given the arrhythmia risk of hyperkalemia in that population, and state that \
+elevated-risk rationale explicitly when it applies.
 - For each current medication where the case includes a specific dose, check whether that dose \
 appears high or atypical GIVEN THIS PATIENT'S documented age, weight, and renal/hepatic history \
 (when provided). Flag this as a dosage concern with the clinical basis stated (e.g. "reduced \
@@ -148,6 +166,19 @@ Beers Criteria-type reasoning for polypharmacy), not speculation. Report the tot
 current medications and any such cumulative concern found, even if no single pairwise \
 interaction was flagged.
 - If information is insufficient for a confident ranking, say so rather than guessing.
+- When your top-ranked differential is reasonably well-supported by the case (not highly uncertain) \
+AND represents a condition with well-established, guideline-recognized first-line treatment \
+approaches, include treatment_options: a short list of options a physician might consider for \
+that specific condition, each with case-specific rationale. Frame every option as something "to \
+consider," never as an instruction or a recommendation to prescribe - the physician decides \
+whether, when, and how to treat. Include non-pharmacological options where clinically relevant, \
+not only medications. NEVER state a specific starting dose or titration schedule for a \
+treatment-naive patient - name the medication or intervention and its rationale only; dosing is \
+the physician's determination, same as with existing medications elsewhere in this schema. Always \
+name any major contraindications or cautions relevant to this specific patient (age, other \
+conditions, other medications) in the "cautions" field. If the differential is too uncertain, or \
+the condition has no well-established first-line approach, omit treatment_options entirely (an \
+empty list) rather than speculating.
 - Output ONLY valid JSON. No markdown, no preamble, no commentary outside the JSON object.
 """
 
@@ -176,6 +207,9 @@ Respond with exactly this JSON shape:
     ],
     "note": "string or null"
   },
+  "treatment_options": [
+    {"option": "string", "type": "pharmacological|non-pharmacological", "for_condition": "string (the differential this addresses)", "rationale": "string", "cautions": "string or null"}
+  ],
   "insufficient_data_note": "string or null"
 }
 """
@@ -332,7 +366,7 @@ def run_dx_engine(case: PatientCase, high_acuity: bool = False) -> dict:
 
     response = client.messages.create(
         model=model,
-        max_tokens=8000,
+        max_tokens=10000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_content}],
     )
@@ -380,6 +414,7 @@ def run_dx_engine(case: PatientCase, high_acuity: bool = False) -> dict:
     result.setdefault("therapeutic_duplications", [])
     result.setdefault("dosage_concerns", [])
     result.setdefault("polypharmacy_assessment", {"medication_count": len(case.current_medications), "cumulative_concerns": [], "note": None})
+    result.setdefault("treatment_options", [])
 
     result["_meta"] = {
         "model": model,
