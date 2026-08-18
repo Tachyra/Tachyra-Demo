@@ -110,6 +110,12 @@ general clinical knowledge for it, but note in insufficient_data_note that verif
 was unavailable for that specific medication so the physician knows which flags rest on \
 verified data versus general knowledge.
 
+You may also receive an "ON-FILE PATIENT HISTORY" section, containing this patient's data from \
+prior visits (labs, imaging, structured medication history, surgical history, and other intake \
+fields), clearly separated from what's reported for today's visit above it. Treat this as real \
+prior clinical history, not as part of today's presentation, but factor it into your differentials \
+and flags the same way you would a chart review before seeing a patient.
+
 Rules:
 - Never state a diagnosis as fact. Always frame as "possible" or "consider."
 - Rank differentials by clinical likelihood given the presented data, most likely first.
@@ -179,6 +185,16 @@ name any major contraindications or cautions relevant to this specific patient (
 conditions, other medications) in the "cautions" field. If the differential is too uncertain, or \
 the condition has no well-established first-line approach, omit treatment_options entirely (an \
 empty list) rather than speculating.
+- You will be told explicitly which data categories are on file for this patient from prior \
+visits (labs, imaging, surgical history, medication start/stop dates, etc.), clearly separated \
+from what's reported for today's visit. Any category explicitly marked "none on file" or "none \
+recorded" must be treated as UNKNOWN or NOT YET ASSESSED, never as normal, negative, or \
+absent-of-findings. Never assume a body system, lab value, or imaging study is normal just \
+because no data about it is on file. "No imaging on file" and "imaging shows no acute findings" \
+are different facts - do not collapse them. Populate missing_data_flags with every clinically \
+relevant category that is missing given the presenting complaint (e.g. a chest pain case with no \
+troponin or ECG on file should flag both), and separately populate suggested_tests with what \
+you'd want ordered to close those gaps.
 - Output ONLY valid JSON. No markdown, no preamble, no commentary outside the JSON object.
 """
 
@@ -209,6 +225,12 @@ Respond with exactly this JSON shape:
   },
   "treatment_options": [
     {"option": "string", "type": "pharmacological|non-pharmacological", "for_condition": "string (the differential this addresses)", "rationale": "string", "cautions": "string or null"}
+  ],
+  "missing_data_flags": [
+    {"category": "labs|imaging|surgical_history|medication_dates|vaccination_history|substance_use|other", "why_it_matters": "string"}
+  ],
+  "suggested_tests": [
+    {"test": "string", "rationale": "string"}
   ],
   "insufficient_data_note": "string or null"
 }
@@ -329,13 +351,119 @@ def build_drug_facts_section(medications: list[str]) -> tuple[str, list[str], li
     return "\n\n".join(section_parts), found_meds, not_found
 
 
-def run_dx_engine(case: PatientCase, high_acuity: bool = False) -> dict:
+def build_clinical_picture_section(clinical_picture: Optional[dict]) -> str:
+    """Formats a patient's on-file history (from prior visits, saved via
+    the /patient/{id}/intake, /lab, /imaging, /medication endpoints) for
+    inclusion in the prompt, clearly separated from what's typed fresh
+    into this visit's case.
+
+    Critical: every category is stated explicitly as present or "none on
+    file" - never omitted when empty. An omitted section reads to the
+    model as "wasn't asked about"; an explicit "none on file" reads as
+    "checked and confirmed absent." That distinction is the whole point
+    of this function.
+    """
+    if not clinical_picture:
+        return (
+            "ON-FILE PATIENT HISTORY: none available. This appears to be "
+            "this patient's first recorded visit, or no prior data has "
+            "been entered. Treat all history categories below as unknown, "
+            "not as negative."
+        )
+
+    lines = ["ON-FILE PATIENT HISTORY (from prior visits, distinct from what's reported for today's visit above):"]
+
+    intake = clinical_picture.get("intake")
+    if intake:
+        lines.append(
+            f"- Surgical history on file: {intake['procedures_surgeries']}"
+            if intake.get("procedures_surgeries") else
+            "- Surgical history on file: none recorded"
+        )
+        lines.append(
+            f"- Illicit/recreational drug use on file: {intake['illicit_drug_use']}"
+            if intake.get("illicit_drug_use") else
+            "- Illicit/recreational drug use on file: none recorded"
+        )
+        lines.append(
+            f"- Supplements/OTC products on file: {intake['supplements']}"
+            if intake.get("supplements") else
+            "- Supplements/OTC products on file: none recorded"
+        )
+        lines.append(
+            f"- Vaccination history on file: {intake['vaccination_history']}"
+            if intake.get("vaccination_history") else
+            "- Vaccination history on file: none recorded"
+        )
+        lines.append(
+            f"- Clinical trial participation on file: {intake['clinical_trial_participation']}"
+            if intake.get("clinical_trial_participation") else
+            "- Clinical trial participation on file: none recorded"
+        )
+    else:
+        lines.append("- No prior intake on file for any history category above.")
+
+    labs = clinical_picture.get("labs") or []
+    if labs:
+        lines.append(f"- Lab results on file ({len(labs)}):")
+        for lab in labs:
+            payload = lab.get("payload", {})
+            date_str = lab.get("date_performed", "unknown date")
+            lines.append(
+                f"    {date_str}: {payload.get('test_name', 'unnamed test')} = "
+                f"{payload.get('result', 'no result recorded')} "
+                f"[{payload.get('flag', 'flag not recorded')}]"
+            )
+    else:
+        lines.append("- Lab results on file: NONE. Do not assume any lab value is normal -- "
+                      "flag relevant missing labs in missing_data_flags.")
+
+    imaging = clinical_picture.get("imaging") or []
+    if imaging:
+        lines.append(f"- Imaging/radiology reports on file ({len(imaging)}):")
+        for img in imaging:
+            payload = img.get("payload", {})
+            date_str = img.get("date_performed", "unknown date")
+            lines.append(
+                f"    {date_str}: {payload.get('modality', 'unnamed study')} "
+                f"({payload.get('region', 'region unspecified')}): "
+                f"{payload.get('findings', 'no findings recorded')}"
+            )
+    else:
+        lines.append("- Imaging/radiology reports on file: NONE. Do not assume imaging is normal "
+                      "or that any structural finding has been ruled out -- flag relevant missing "
+                      "imaging in missing_data_flags.")
+
+    medications = clinical_picture.get("medications") or []
+    if medications:
+        lines.append(f"- Structured medication history on file ({len(medications)}, distinct from "
+                      f"'Current medications' above which reflects today's visit):")
+        for med in medications:
+            start = med.get("start_date", "start date unknown")
+            stop = med.get("stop_date") or "still active"
+            lines.append(
+                f"    {med.get('medication_name', 'unnamed')} "
+                f"{med.get('dose', '')} {med.get('frequency', '')} "
+                f"(started {start}, {stop})"
+            )
+    else:
+        lines.append("- Structured medication history on file: none recorded beyond today's "
+                      "reported current medications.")
+
+    return "\n".join(lines)
+
+
+def run_dx_engine(case: PatientCase, high_acuity: bool = False, clinical_picture: Optional[dict] = None) -> dict:
     """Send a patient case to the model and return structured differential + med-flag JSON.
 
     Set high_acuity=True to route complex/critical cases to the stronger model.
     Attached files (EKG, echo, labs, imaging) are sent as documents/images alongside
     the case text so the model can read them directly. Current medications are looked
     up against the live FDA label database before the case is sent to the model.
+    clinical_picture (optional) carries this patient's on-file history from prior
+    visits - labs, imaging, structured medications, and intake fields - gathered by
+    the caller (backend.py's get_patient_clinical_picture()). Pass None for a
+    patient's first visit or when no history exists yet.
     """
     model = HIGH_ACUITY_MODEL if high_acuity else MODEL
 
@@ -343,6 +471,7 @@ def run_dx_engine(case: PatientCase, high_acuity: bool = False) -> dict:
     prompt_parts = [case.to_prompt()]
     if drug_facts_section:
         prompt_parts.append(drug_facts_section)
+    prompt_parts.append(build_clinical_picture_section(clinical_picture))
     prompt_parts.append(OUTPUT_SCHEMA_HINT)
     text_block = "\n\n".join(prompt_parts)
 
@@ -415,6 +544,8 @@ def run_dx_engine(case: PatientCase, high_acuity: bool = False) -> dict:
     result.setdefault("dosage_concerns", [])
     result.setdefault("polypharmacy_assessment", {"medication_count": len(case.current_medications), "cumulative_concerns": [], "note": None})
     result.setdefault("treatment_options", [])
+    result.setdefault("missing_data_flags", [])
+    result.setdefault("suggested_tests", [])
 
     result["_meta"] = {
         "model": model,
@@ -426,6 +557,88 @@ def run_dx_engine(case: PatientCase, high_acuity: bool = False) -> dict:
         "stop_reason": stop_reason,
     }
     return result
+
+
+# ---------------------------------------------------------------------------
+# SOAP note generation
+# ---------------------------------------------------------------------------
+
+SOAP_SYSTEM_PROMPT = """You are drafting a first-draft SOAP note for a licensed physician's \
+review, based on structured intake data, on-file clinical data, and an already-generated \
+differential/medication analysis. This is a DRAFT ONLY - every section must read as \
+physician-editable shorthand, not a finalized clinical record, and the physician must review \
+and sign off before it is used for care or billing.
+
+Rules:
+- Subjective: summarize patient-reported history in clinical shorthand (chief complaint, HPI, \
+relevant history) - do not add anything the patient/intake didn't report.
+- Objective: include only data actually on file (vitals, labs, imaging with dates). If a \
+category is missing, write "Not on file" rather than omitting it silently or inferring a \
+normal value.
+- Assessment: list the differential considerations already generated, framed as "consider" \
+language, never as a settled diagnosis. Include medication flags here if clinically relevant.
+- Plan: draft reasonable next steps (suggested tests already identified, referrals, monitoring) \
+as a starting point for the physician to edit, not a final order set.
+- Never include a definitive diagnosis, a specific drug dosage recommendation, or any statement \
+implying the AI is the author of record. This is the physician's note; you are drafting \
+language for them to review, edit, and sign.
+- Output ONLY valid JSON. No markdown, no preamble.
+"""
+
+SOAP_OUTPUT_SCHEMA_HINT = """
+Respond with exactly this JSON shape:
+{
+  "subjective": "string",
+  "objective": "string",
+  "assessment": "string",
+  "plan": "string"
+}
+"""
+
+
+def generate_soap_note(intake: Optional[dict], labs: list[dict], imaging: list[dict],
+                        medications: list[dict], ai_analysis: dict) -> dict:
+    """Generates a first-draft SOAP note from a patient's on-file data and an
+    already-generated AI analysis. Uses the same client/model pattern as
+    run_dx_engine(). Called from backend.py's /analysis/{id}/soap-note route."""
+    user_content = (
+        f"INTAKE DATA:\n{json.dumps(intake, default=str)}\n\n"
+        f"LABS ON FILE:\n{json.dumps(labs, default=str)}\n\n"
+        f"IMAGING ON FILE:\n{json.dumps(imaging, default=str)}\n\n"
+        f"MEDICATIONS ON FILE:\n{json.dumps(medications, default=str)}\n\n"
+        f"AI DIFFERENTIAL/MEDICATION ANALYSIS ALREADY GENERATED:\n{json.dumps(ai_analysis, default=str)}\n\n"
+        f"{SOAP_OUTPUT_SCHEMA_HINT}"
+    )
+
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=1200,
+        system=SOAP_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_content}],
+    )
+    raw_text = "".join(
+        block.text for block in response.content if block.type == "text"
+    ).strip()
+    cleaned = raw_text.replace("```json", "").replace("```", "").strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(cleaned[start:end + 1])
+            except json.JSONDecodeError:
+                pass
+        print("SOAP NOTE PARSE ERROR. Raw model output:", raw_text, flush=True)
+        return {
+            "subjective": "",
+            "objective": "",
+            "assessment": "",
+            "plan": "",
+            "error": "Failed to parse SOAP note output as JSON",
+        }
 
 
 if __name__ == "__main__":
