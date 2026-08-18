@@ -33,13 +33,25 @@ wired up yet):
   - An admin (Barry) grants/extends access via POST /admin/grant-access,
     protected by an ADMIN_SECRET the frontend never sees. This is a manual
     stand-in until real billing (e.g. Stripe) is integrated.
+
+Patient records (added Aug 2026): physicians can now create patient
+records and attach structured intake data, lab results, imaging reports,
+and dated medication entries to them. /diagnose now requires a patient_id,
+saves its result permanently (ai_analyses), and feeds that patient's
+on-file history back into the AI's reasoning instead of treating every
+call as a one-off. New patients default to is_test_patient=True - real
+patient data should not be entered until the Anthropic BAA is executed
+and hosting is confirmed BAA-covered (see project compliance notes).
+SOAP note drafts can be generated from a saved analysis for physician
+review/edit/sign-off.
 """
 import os
 import secrets
 import re
 import hashlib
 import hmac
-from datetime import datetime, timezone, timedelta
+import json
+from datetime import datetime, timezone, timedelta, date
 
 import psycopg2
 import psycopg2.extras
@@ -47,7 +59,7 @@ from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-from tachyra_dx_engine import PatientCase, run_dx_engine
+from tachyra_dx_engine import PatientCase, run_dx_engine, generate_soap_note
 
 app = FastAPI(title="Tachyra Diagnostics - Demo API")
 
@@ -146,6 +158,118 @@ def init_db():
                     INSERT INTO settings (key, value)
                     VALUES ('promo_active', 'true')
                     ON CONFLICT (key) DO NOTHING;
+                    """
+                )
+
+                # ---------------------------------------------------------
+                # Patient persistence (added Aug 2026)
+                # ---------------------------------------------------------
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS patients (
+                        id SERIAL PRIMARY KEY,
+                        display_name TEXT NOT NULL,
+                        date_of_birth DATE,
+                        created_by_physician_id INTEGER NOT NULL REFERENCES physicians(id),
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        is_test_patient BOOLEAN NOT NULL DEFAULT TRUE
+                    );
+                    """
+                )
+                # is_test_patient defaults to TRUE deliberately - real patient
+                # data should not be entered until the Anthropic BAA is
+                # executed and hosting is confirmed BAA-covered.
+
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS intake_submissions (
+                        id SERIAL PRIMARY KEY,
+                        patient_id INTEGER NOT NULL REFERENCES patients(id),
+                        chief_complaint TEXT,
+                        onset_frequency TEXT,
+                        ongoing_conditions TEXT,
+                        procedures_surgeries TEXT,
+                        current_medications_patient_reported TEXT,
+                        drug_allergies TEXT,
+                        family_history TEXT,
+                        illicit_drug_use TEXT,
+                        supplements TEXT,
+                        vaccination_history TEXT,
+                        clinical_trial_participation TEXT,
+                        additional_notes TEXT,
+                        submitted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    );
+                    """
+                )
+
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS clinical_data_on_file (
+                        id SERIAL PRIMARY KEY,
+                        patient_id INTEGER NOT NULL REFERENCES patients(id),
+                        data_type TEXT NOT NULL CHECK (data_type IN ('lab_result', 'imaging')),
+                        source TEXT NOT NULL DEFAULT 'manual_entry',
+                        payload JSONB NOT NULL,
+                        date_performed DATE NOT NULL,
+                        entered_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    );
+                    """
+                )
+                # date_performed is a real, NOT NULL column (not buried in
+                # the JSONB payload) so absence of data is enforceable and
+                # unambiguous - the direct fix for the AI assuming imaging
+                # was normal when it was never actually collected.
+
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS medication_entries (
+                        id SERIAL PRIMARY KEY,
+                        patient_id INTEGER NOT NULL REFERENCES patients(id),
+                        medication_name TEXT NOT NULL,
+                        dose TEXT,
+                        frequency TEXT,
+                        start_date DATE,
+                        stop_date DATE,
+                        prescribing_physician TEXT,
+                        source TEXT NOT NULL DEFAULT 'manual_entry',
+                        entered_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    );
+                    """
+                )
+
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS ai_analyses (
+                        id SERIAL PRIMARY KEY,
+                        patient_id INTEGER NOT NULL REFERENCES patients(id),
+                        physician_id INTEGER NOT NULL REFERENCES physicians(id),
+                        intake_submission_id INTEGER REFERENCES intake_submissions(id),
+                        raw_response JSONB NOT NULL,
+                        prompt_version TEXT NOT NULL DEFAULT 'v2',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    );
+                    """
+                )
+                # This table is what turns /diagnose from stateless into
+                # persistent. prompt_version exists so future prompt
+                # changes stay auditable.
+
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS soap_notes (
+                        id SERIAL PRIMARY KEY,
+                        analysis_id INTEGER NOT NULL REFERENCES ai_analyses(id),
+                        patient_id INTEGER NOT NULL REFERENCES patients(id),
+                        physician_id INTEGER NOT NULL REFERENCES physicians(id),
+                        subjective TEXT,
+                        objective TEXT,
+                        assessment TEXT,
+                        plan TEXT,
+                        ai_generated_draft BOOLEAN NOT NULL DEFAULT TRUE,
+                        physician_edited BOOLEAN NOT NULL DEFAULT FALSE,
+                        finalized_at TIMESTAMPTZ,
+                        generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    );
                     """
                 )
     finally:
@@ -501,10 +625,275 @@ def grant_access(req: GrantAccessRequest, x_admin_secret: Optional[str] = Header
 
 
 # ---------------------------------------------------------------------------
-# Existing diagnose endpoint (now requires physician login + active access)
+# Patients: create, retrieve, list
+# ---------------------------------------------------------------------------
+
+class CreatePatientRequest(BaseModel):
+    display_name: str
+    date_of_birth: Optional[date] = None
+    is_test_patient: bool = True  # default TRUE - real patients require BAA in place first
+
+
+@app.post("/patient")
+def create_patient(req: CreatePatientRequest, physician_id: int = Depends(require_physician)):
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO patients (display_name, date_of_birth, created_by_physician_id, is_test_patient)
+                    VALUES (%s, %s, %s, %s) RETURNING id;
+                    """,
+                    (req.display_name.strip(), req.date_of_birth, physician_id, req.is_test_patient),
+                )
+                patient_id = cur.fetchone()[0]
+    finally:
+        conn.close()
+    return {"id": patient_id, "display_name": req.display_name, "is_test_patient": req.is_test_patient}
+
+
+@app.get("/patient/{patient_id}")
+def get_patient(patient_id: int, physician_id: int = Depends(require_physician)):
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM patients WHERE id = %s;", (patient_id,))
+                patient = cur.fetchone()
+                if not patient:
+                    raise HTTPException(status_code=404, detail="Patient not found.")
+    finally:
+        conn.close()
+    return dict(patient)
+
+
+@app.get("/physician/patients")
+def list_my_patients(physician_id: int = Depends(require_physician)):
+    """Patients created by the logged-in physician. Simple ownership model
+    for now - worth revisiting once more than one physician needs to share
+    a patient record."""
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM patients WHERE created_by_physician_id = %s ORDER BY created_at DESC;",
+                    (physician_id,),
+                )
+                patients = cur.fetchall()
+    finally:
+        conn.close()
+    return [dict(p) for p in patients]
+
+
+# ---------------------------------------------------------------------------
+# Intake submissions
+# ---------------------------------------------------------------------------
+
+class IntakeRequest(BaseModel):
+    chief_complaint: Optional[str] = None
+    onset_frequency: Optional[str] = None
+    ongoing_conditions: Optional[str] = None
+    procedures_surgeries: Optional[str] = None  # "Surgical History & Procedures" in UI
+    current_medications_patient_reported: Optional[str] = None
+    drug_allergies: Optional[str] = None
+    family_history: Optional[str] = None
+    illicit_drug_use: Optional[str] = None
+    supplements: Optional[str] = None
+    vaccination_history: Optional[str] = None
+    clinical_trial_participation: Optional[str] = None
+    additional_notes: Optional[str] = None
+
+
+@app.post("/patient/{patient_id}/intake")
+def submit_intake(patient_id: int, req: IntakeRequest, physician_id: int = Depends(require_physician)):
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM patients WHERE id = %s;", (patient_id,))
+                if not cur.fetchone():
+                    raise HTTPException(status_code=404, detail="Patient not found.")
+                cur.execute(
+                    """
+                    INSERT INTO intake_submissions
+                        (patient_id, chief_complaint, onset_frequency, ongoing_conditions,
+                         procedures_surgeries, current_medications_patient_reported,
+                         drug_allergies, family_history, illicit_drug_use, supplements,
+                         vaccination_history, clinical_trial_participation, additional_notes)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id;
+                    """,
+                    (patient_id, req.chief_complaint, req.onset_frequency, req.ongoing_conditions,
+                     req.procedures_surgeries, req.current_medications_patient_reported,
+                     req.drug_allergies, req.family_history, req.illicit_drug_use, req.supplements,
+                     req.vaccination_history, req.clinical_trial_participation, req.additional_notes),
+                )
+                intake_id = cur.fetchone()[0]
+    finally:
+        conn.close()
+    return {"id": intake_id, "status": "saved"}
+
+
+# ---------------------------------------------------------------------------
+# Lab results / imaging (date_performed required - enforced at the DB
+# level via NOT NULL on the column)
+# ---------------------------------------------------------------------------
+
+class LabResultRequest(BaseModel):
+    test_name: str
+    result: str
+    date_performed: date
+    reference_range: Optional[str] = None
+    flag: Optional[str] = None  # "normal" | "high" | "low" | "critical"
+    ordering_physician: Optional[str] = None
+
+
+class ImagingReportRequest(BaseModel):
+    modality: str
+    findings: str
+    date_performed: date
+    region: Optional[str] = None
+    reading_radiologist: Optional[str] = None
+
+
+def _save_clinical_data(patient_id: int, data_type: str, payload: dict, date_performed: date):
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM patients WHERE id = %s;", (patient_id,))
+                if not cur.fetchone():
+                    raise HTTPException(status_code=404, detail="Patient not found.")
+                cur.execute(
+                    """
+                    INSERT INTO clinical_data_on_file (patient_id, data_type, payload, date_performed)
+                    VALUES (%s, %s, %s, %s) RETURNING id;
+                    """,
+                    (patient_id, data_type, json.dumps(payload), date_performed),
+                )
+                row_id = cur.fetchone()[0]
+    finally:
+        conn.close()
+    return row_id
+
+
+@app.post("/patient/{patient_id}/lab")
+def submit_lab_result(patient_id: int, req: LabResultRequest, physician_id: int = Depends(require_physician)):
+    payload = {
+        "test_name": req.test_name,
+        "result": req.result,
+        "reference_range": req.reference_range,
+        "flag": req.flag,
+        "ordering_physician": req.ordering_physician,
+    }
+    row_id = _save_clinical_data(patient_id, "lab_result", payload, req.date_performed)
+    return {"id": row_id, "status": "saved"}
+
+
+@app.post("/patient/{patient_id}/imaging")
+def submit_imaging_report(patient_id: int, req: ImagingReportRequest, physician_id: int = Depends(require_physician)):
+    payload = {
+        "modality": req.modality,
+        "region": req.region,
+        "findings": req.findings,
+        "reading_radiologist": req.reading_radiologist,
+    }
+    row_id = _save_clinical_data(patient_id, "imaging", payload, req.date_performed)
+    return {"id": row_id, "status": "saved"}
+
+
+# ---------------------------------------------------------------------------
+# Medications (structured, with start/stop dates)
+# ---------------------------------------------------------------------------
+
+class MedicationEntryRequest(BaseModel):
+    medication_name: str
+    dose: Optional[str] = None
+    frequency: Optional[str] = None
+    start_date: Optional[date] = None
+    stop_date: Optional[date] = None
+    prescribing_physician: Optional[str] = None
+
+
+@app.post("/patient/{patient_id}/medication")
+def submit_medication_entry(patient_id: int, req: MedicationEntryRequest, physician_id: int = Depends(require_physician)):
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM patients WHERE id = %s;", (patient_id,))
+                if not cur.fetchone():
+                    raise HTTPException(status_code=404, detail="Patient not found.")
+                cur.execute(
+                    """
+                    INSERT INTO medication_entries
+                        (patient_id, medication_name, dose, frequency, start_date, stop_date, prescribing_physician)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id;
+                    """,
+                    (patient_id, req.medication_name, req.dose, req.frequency,
+                     req.start_date, req.stop_date, req.prescribing_physician),
+                )
+                row_id = cur.fetchone()[0]
+    finally:
+        conn.close()
+    return {"id": row_id, "status": "saved"}
+
+
+# ---------------------------------------------------------------------------
+# Helper: pull everything on file for a patient, for feeding into /diagnose
+# ---------------------------------------------------------------------------
+
+def get_patient_clinical_picture(patient_id: int) -> dict:
+    """Gathers all on-file data for a patient: latest intake, labs,
+    imaging, and current/past medications. This is what makes /diagnose
+    aware of prior history instead of only the current request."""
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM intake_submissions WHERE patient_id = %s ORDER BY submitted_at DESC LIMIT 1;",
+                    (patient_id,),
+                )
+                intake = cur.fetchone()
+
+                cur.execute(
+                    "SELECT * FROM clinical_data_on_file WHERE patient_id = %s AND data_type = 'lab_result' ORDER BY date_performed DESC;",
+                    (patient_id,),
+                )
+                labs = cur.fetchall()
+
+                cur.execute(
+                    "SELECT * FROM clinical_data_on_file WHERE patient_id = %s AND data_type = 'imaging' ORDER BY date_performed DESC;",
+                    (patient_id,),
+                )
+                imaging = cur.fetchall()
+
+                cur.execute(
+                    "SELECT * FROM medication_entries WHERE patient_id = %s ORDER BY start_date DESC;",
+                    (patient_id,),
+                )
+                medications = cur.fetchall()
+    finally:
+        conn.close()
+
+    return {
+        "intake": dict(intake) if intake else None,
+        "labs": [dict(r) for r in labs],
+        "imaging": [dict(r) for r in imaging],
+        "medications": [dict(r) for r in medications],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Existing diagnose endpoint - now requires a patient_id, saves its result,
+# and feeds that patient's on-file history into the AI's reasoning.
 # ---------------------------------------------------------------------------
 
 class CaseRequest(BaseModel):
+    patient_id: int
     chief_complaint: str
     symptoms: list[str]
     age: Optional[int] = None
@@ -572,8 +961,23 @@ def validate_attached_files(files: list[dict]) -> None:
 
 @app.post("/diagnose")
 def diagnose(req: CaseRequest, physician_id: int = Depends(require_physician)):
+    conn_check = get_db_connection()
+    try:
+        with conn_check:
+            with conn_check.cursor() as cur:
+                cur.execute("SELECT id FROM patients WHERE id = %s;", (req.patient_id,))
+                if not cur.fetchone():
+                    raise HTTPException(status_code=404, detail="Patient not found.")
+    finally:
+        conn_check.close()
+
     try:
         validate_attached_files(req.attached_files)
+
+        # Pull prior history and merge it in - this is what makes the
+        # difference between "assumed normal" and "flagged as missing."
+        clinical_picture = get_patient_clinical_picture(req.patient_id)
+
         case = PatientCase(
             chief_complaint=req.chief_complaint,
             symptoms=req.symptoms,
@@ -597,13 +1001,124 @@ def diagnose(req: CaseRequest, physician_id: int = Depends(require_physician)):
             social_history=req.social_history,
             attached_files=req.attached_files,
         )
-        result = run_dx_engine(case, high_acuity=req.high_acuity)
+        result = run_dx_engine(case, high_acuity=req.high_acuity, clinical_picture=clinical_picture)
+
+        # Save the result - this is the persistence piece that didn't
+        # exist before.
+        conn = get_db_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    intake_id = clinical_picture["intake"]["id"] if clinical_picture["intake"] else None
+                    cur.execute(
+                        """
+                        INSERT INTO ai_analyses (patient_id, physician_id, intake_submission_id, raw_response)
+                        VALUES (%s, %s, %s, %s) RETURNING id;
+                        """,
+                        (req.patient_id, physician_id, intake_id, json.dumps(result)),
+                    )
+                    analysis_id = cur.fetchone()[0]
+        finally:
+            conn.close()
+
+        result["analysis_id"] = analysis_id
         return result
     except HTTPException:
         raise
     except Exception as e:
         print("ERROR:", repr(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# SOAP note generation - drafts from an existing saved analysis.
+# ---------------------------------------------------------------------------
+
+class SoapNoteEditRequest(BaseModel):
+    subjective: Optional[str] = None
+    objective: Optional[str] = None
+    assessment: Optional[str] = None
+    plan: Optional[str] = None
+    finalize: bool = False
+
+
+@app.post("/analysis/{analysis_id}/soap-note")
+def create_soap_note(analysis_id: int, physician_id: int = Depends(require_physician)):
+    """Generates a first-draft SOAP note from an existing saved analysis.
+    This is a DRAFT ONLY - the physician must review, edit as needed, and
+    finalize before it's treated as a real clinical document."""
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM ai_analyses WHERE id = %s;", (analysis_id,))
+                analysis = cur.fetchone()
+                if not analysis:
+                    raise HTTPException(status_code=404, detail="Analysis not found.")
+    finally:
+        conn.close()
+
+    patient_id = analysis["patient_id"]
+    clinical_picture = get_patient_clinical_picture(patient_id)
+    ai_analysis = analysis["raw_response"]
+
+    soap_json = generate_soap_note(
+        intake=clinical_picture["intake"],
+        labs=clinical_picture["labs"],
+        imaging=clinical_picture["imaging"],
+        medications=clinical_picture["medications"],
+        ai_analysis=ai_analysis,
+    )
+
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO soap_notes
+                        (analysis_id, patient_id, physician_id, subjective, objective, assessment, plan)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id;
+                    """,
+                    (analysis_id, patient_id, physician_id,
+                     soap_json.get("subjective", ""), soap_json.get("objective", ""),
+                     soap_json.get("assessment", ""), soap_json.get("plan", "")),
+                )
+                soap_id = cur.fetchone()[0]
+    finally:
+        conn.close()
+
+    return {"id": soap_id, **soap_json, "ai_generated_draft": True}
+
+
+@app.patch("/soap-note/{soap_note_id}")
+def edit_soap_note(soap_note_id: int, req: SoapNoteEditRequest, physician_id: int = Depends(require_physician)):
+    fields, values = [], []
+    for col, val in [("subjective", req.subjective), ("objective", req.objective),
+                      ("assessment", req.assessment), ("plan", req.plan)]:
+        if val is not None:
+            fields.append(f"{col} = %s")
+            values.append(val)
+    if fields:
+        fields.append("physician_edited = %s")
+        values.append(True)
+    if req.finalize:
+        fields.append("finalized_at = now()")
+    if not fields:
+        return {"status": "no changes"}
+
+    values.append(soap_note_id)
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE soap_notes SET {', '.join(fields)} WHERE id = %s;",
+                    values,
+                )
+    finally:
+        conn.close()
+    return {"status": "updated"}
 
 
 @app.get("/health")
