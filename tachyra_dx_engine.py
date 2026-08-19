@@ -612,14 +612,38 @@ def generate_soap_note(intake: Optional[dict], labs: list[dict], imaging: list[d
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=1200,
+        max_tokens=2000,
         system=SOAP_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_content}],
     )
+
+    stop_reason = getattr(response, "stop_reason", None)
+    block_types = [getattr(b, "type", "unknown") for b in response.content]
+    print(
+        f"SOAP NOTE DEBUG: stop_reason={stop_reason}, "
+        f"num_blocks={len(response.content)}, block_types={block_types}, "
+        f"usage={getattr(response, 'usage', None)}",
+        flush=True,
+    )
+
     raw_text = "".join(
-        block.text for block in response.content if block.type == "text"
+        block.text for block in response.content if getattr(block, "type", None) == "text"
     ).strip()
     cleaned = raw_text.replace("```json", "").replace("```", "").strip()
+
+    if not cleaned:
+        print(
+            f"SOAP NOTE EMPTY RESPONSE. stop_reason={stop_reason}, "
+            f"full response.content={response.content}",
+            flush=True,
+        )
+        return {
+            "subjective": "",
+            "objective": "",
+            "assessment": "",
+            "plan": "",
+            "error": f"Model returned empty content (stop_reason={stop_reason})",
+        }
 
     try:
         return json.loads(cleaned)
