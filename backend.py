@@ -13,7 +13,7 @@ import hashlib
 import hmac
 from datetime import datetime, timezone, timedelta
 
-from from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends
 
 import psycopg2
 import psycopg2.extras
