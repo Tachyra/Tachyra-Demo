@@ -13,11 +13,10 @@ import hashlib
 import hmac
 from datetime import datetime, timezone, timedelta
 
-Header, Depends
+from from fastapi import FastAPI, HTTPException, Header, Depends
 
 import psycopg2
 import psycopg2.extras
-from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
