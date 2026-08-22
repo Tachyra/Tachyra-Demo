@@ -1121,10 +1121,12 @@
 const DIAGNOSE_ENDPOINT = "https://tachyra-pilot.onrender.com/diagnose";
 const REGISTER_ENDPOINT = "https://tachyra-pilot.onrender.com/physician/register";
 const LOGIN_ENDPOINT = "https://tachyra-pilot.onrender.com/physician/login";
+const PATIENT_ENDPOINT = "https://tachyra-pilot.onrender.com/patient";
 document.getElementById('endpointLabel').textContent = DIAGNOSE_ENDPOINT;
 
 const TOKEN_KEY = 'tachyraPhysicianToken';
 const EMAIL_KEY = 'tachyraPhysicianEmail';
+const PATIENT_ID_KEY = 'tachyraPatientId';
 
 const authShell = document.getElementById('authShell');
 const mainGrid = document.getElementById('mainGrid');
@@ -1144,6 +1146,27 @@ function setSession(token, email) {
 function clearSession() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(EMAIL_KEY);
+  localStorage.removeItem(PATIENT_ID_KEY);
+}
+
+async function ensurePatientId(token) {
+  const existing = localStorage.getItem(PATIENT_ID_KEY);
+  if (existing) return Number(existing);
+
+  const res = await fetch(PATIENT_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + token
+    },
+    body: JSON.stringify({ display_name: 'Pilot Test Patient', is_test_patient: true })
+  });
+  if (!res.ok) {
+    throw new Error('Could not create a test patient record (' + res.status + ')');
+  }
+  const data = await res.json();
+  localStorage.setItem(PATIENT_ID_KEY, data.id);
+  return data.id;
 }
 
 function showApp() {
@@ -1809,7 +1832,17 @@ runBtn.addEventListener('click', async () => {
     return v !== '' ? Number(v) : null;
   }
 
+  let patientId;
+  try {
+    patientId = await ensurePatientId(token);
+  } catch (err) {
+    resultsActionsWrap.innerHTML = '';
+    resultsBody.innerHTML = `<div class="error-box">${err.message}</div>`;
+    return;
+  }
+
   const payload = {
+    patient_id: patientId,
     chief_complaint: document.getElementById('complaint').value.trim(),
     submitted_by: selectedRole,
     symptoms: splitList(document.getElementById('symptoms').value),
