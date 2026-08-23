@@ -495,7 +495,7 @@ def run_dx_engine(case: PatientCase, high_acuity: bool = False, clinical_picture
 
     response = client.messages.create(
         model=model,
-        max_tokens=10000,
+        max_tokens=16000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_content}],
     )
