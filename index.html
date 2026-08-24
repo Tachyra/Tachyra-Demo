@@ -1,3 +1,5 @@
+
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -721,13 +723,15 @@
   #medsContainer { margin-top: 8px; }
   .med-row {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     align-items: flex-start;
     margin-bottom: 8px;
   }
-  .med-row .autocomplete-wrap { flex: 1; }
+  .med-row .autocomplete-wrap { flex: 1 1 180px; }
   .med-dose { flex: 0 0 78px; }
   .med-frequency { flex: 0 0 128px; }
+  .med-start, .med-stop { flex: 0 0 138px; }
   .med-remove {
     flex: 0 0 auto;
     width: 34px;
@@ -1076,11 +1080,13 @@
               <option value="as needed">As needed</option>
               <option value="other">Other</option>
             </select>
+            <input class="med-start" type="date" title="Start date (optional)">
+            <input class="med-stop" type="date" title="Stop date, if discontinued (optional)">
             <button type="button" class="med-remove" title="Remove">×</button>
           </div>
         </div>
         <button type="button" class="med-add" id="medAddBtn">+ Add another medication</button>
-        <div class="field-note" id="medsNote">Suggestions from RxNorm (NIH National Library of Medicine). Select from the list or type freely. Enter a dose in mg and dosing frequency alongside each medication if known.</div>
+        <div class="field-note" id="medsNote">Suggestions from RxNorm (NIH National Library of Medicine). Select from the list or type freely. Enter a dose in mg and dosing frequency alongside each medication if known. Start/stop dates help identify prescribing cascades and duration-related risk.</div>
 
         <label for="allergies">Allergies</label>
         <input id="allergies" placeholder="e.g. penicillin (rash)">
@@ -1093,6 +1099,21 @@
 
         <label for="socialHistory">Social history</label>
         <input id="socialHistory" placeholder="e.g. non-smoker, occasional alcohol, works construction">
+
+        <label for="surgicalHistory">Surgical history</label>
+        <input id="surgicalHistory" placeholder="e.g. appendectomy 2015, right knee arthroscopy 2021">
+
+        <label for="illicitDrugUse">Illicit drug use <span class="optional-tag">(optional)</span></label>
+        <input id="illicitDrugUse" placeholder="e.g. denies, or specify substance/frequency">
+
+        <label for="supplements">Supplements <span class="optional-tag">(optional)</span></label>
+        <input id="supplements" placeholder="e.g. vitamin D 2000IU daily, fish oil">
+
+        <label for="vaccinationHistory">Vaccination history <span class="optional-tag">(optional)</span></label>
+        <input id="vaccinationHistory" placeholder="e.g. up to date, or specify gaps">
+
+        <label for="clinicalTrialParticipation">Clinical trial participation <span class="optional-tag">(optional)</span></label>
+        <input id="clinicalTrialParticipation" placeholder="e.g. trial name/phase and intervention, if known">
 
         <div class="acuity-toggle">
           <input type="checkbox" id="highAcuity" style="width:auto;">
@@ -1122,6 +1143,8 @@ const DIAGNOSE_ENDPOINT = "https://tachyra-pilot.onrender.com/diagnose";
 const REGISTER_ENDPOINT = "https://tachyra-pilot.onrender.com/physician/register";
 const LOGIN_ENDPOINT = "https://tachyra-pilot.onrender.com/physician/login";
 const PATIENT_ENDPOINT = "https://tachyra-pilot.onrender.com/patient";
+const PATIENT_BASE = "https://tachyra-pilot.onrender.com/patient";
+const SOAP_NOTE_BASE = "https://tachyra-pilot.onrender.com/analysis";
 document.getElementById('endpointLabel').textContent = DIAGNOSE_ENDPOINT;
 
 const TOKEN_KEY = 'tachyraPhysicianToken';
@@ -1430,17 +1453,55 @@ function buildSummaryText(data) {
 }
 
 function renderResultsActions() {
+  const hasAnalysisId = lastResultData && lastResultData.analysis_id;
   resultsActionsWrap.innerHTML = `
     <div class="results-actions">
       <button type="button" class="results-action-btn" id="printBtn">🖨 Print</button>
       <button type="button" class="results-action-btn" id="emailBtn">✉ Email</button>
-    </div>`;
+      ${hasAnalysisId ? '<button type="button" class="results-action-btn" id="soapBtn">📝 Generate SOAP Note Draft</button>' : ''}
+    </div>
+    <div id="soapNoteWrap"></div>`;
   document.getElementById('printBtn').addEventListener('click', () => window.print());
   document.getElementById('emailBtn').addEventListener('click', () => {
     const subject = encodeURIComponent('Tachyra DX — Differential & Medication Review');
     const body = encodeURIComponent(lastResultSummaryText);
     window.location.href = `mailto:?subject=${subject}&body=${body}`;
   });
+  if (hasAnalysisId) {
+    document.getElementById('soapBtn').addEventListener('click', async (e) => {
+      const btn = e.target;
+      const wrap = document.getElementById('soapNoteWrap');
+      const token = getToken();
+      if (!token) {
+        showAuthGate('Please log in to generate a SOAP note.');
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Generating…';
+      wrap.innerHTML = '<div class="spinner-line">Drafting SOAP note…</div>';
+      try {
+        const res = await fetch(`${SOAP_NOTE_BASE}/${lastResultData.analysis_id}/soap-note`, {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        if (!res.ok) throw new Error(`Server responded ${res.status}`);
+        const note = await res.json();
+        wrap.innerHTML = `
+          <div class="flags-section" style="margin-top:16px;">
+            <label style="margin-bottom:10px;">SOAP Note Draft <span class="optional-tag">(draft only — physician must review, edit, and finalize)</span></label>
+            <div class="flag-item low"><div class="flag-meds">Subjective</div><div>${note.subjective || ''}</div></div>
+            <div class="flag-item low"><div class="flag-meds">Objective</div><div>${note.objective || ''}</div></div>
+            <div class="flag-item low"><div class="flag-meds">Assessment</div><div>${note.assessment || ''}</div></div>
+            <div class="flag-item low"><div class="flag-meds">Plan</div><div>${note.plan || ''}</div></div>
+          </div>`;
+      } catch (err) {
+        wrap.innerHTML = `<div class="error-box">Could not generate SOAP note. ${err.message}</div>`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '📝 Generate SOAP Note Draft';
+      }
+    });
+  }
 }
 
 function renderResults(data) {
@@ -1580,6 +1641,32 @@ function renderResults(data) {
           <div class="flag-meds">${t.option} · ${t.type} · for ${t.for_condition}</div>
           <div>${t.rationale}</div>
           ${t.cautions ? `<div class="flag-severity">Caution: ${t.cautions}</div>` : ''}
+        </div>`;
+    });
+    html += '</div>';
+  }
+
+  const missingFlags = data.missing_data_flags || [];
+  if (missingFlags.length) {
+    html += '<div class="flags-section" style="margin-top:24px;"><label style="margin-bottom:10px;">Missing Data on File</label>';
+    missingFlags.forEach(m => {
+      html += `
+        <div class="flag-item low">
+          <div class="flag-meds">${(m.category || '').replace(/_/g, ' ')}</div>
+          <div>${m.why_it_matters}</div>
+        </div>`;
+    });
+    html += '</div>';
+  }
+
+  const suggestedTests = data.suggested_tests || [];
+  if (suggestedTests.length) {
+    html += '<div class="flags-section" style="margin-top:24px;"><label style="margin-bottom:10px;">Suggested Tests to Consider</label>';
+    suggestedTests.forEach(t => {
+      html += `
+        <div class="flag-item low">
+          <div class="flag-meds">${t.test}</div>
+          <div>${t.rationale}</div>
         </div>`;
     });
     html += '</div>';
@@ -1765,6 +1852,8 @@ function addMedRow() {
       <option value="as needed">As needed</option>
       <option value="other">Other</option>
     </select>
+    <input class="med-start" type="date" title="Start date (optional)">
+    <input class="med-stop" type="date" title="Stop date, if discontinued (optional)">
     <button type="button" class="med-remove" title="Remove">×</button>`;
   medsContainer.appendChild(row);
   wireMedRow(row);
@@ -1806,6 +1895,8 @@ function buildMedicationStrings() {
     const name = row.querySelector('.med-input').value.trim();
     const dose = row.querySelector('.med-dose').value.trim();
     const freq = row.querySelector('.med-frequency').value;
+    const start = row.querySelector('.med-start').value;
+    const stop = row.querySelector('.med-stop').value;
     if (!name) return '';
     let result = name;
     if (dose && !/\d/.test(name)) {
@@ -1814,7 +1905,33 @@ function buildMedicationStrings() {
     if (freq) {
       result += ` — ${freq}`;
     }
+    if (start && stop) {
+      result += ` (${start} to ${stop})`;
+    } else if (start) {
+      result += ` (since ${start})`;
+    } else if (stop) {
+      result += ` (stopped ${stop})`;
+    }
     return result;
+  }).filter(Boolean);
+}
+
+function buildMedicationEntries() {
+  const rows = Array.from(medsContainer.querySelectorAll('.med-row'));
+  return rows.map(row => {
+    const medication_name = row.querySelector('.med-input').value.trim();
+    if (!medication_name) return null;
+    const dose = row.querySelector('.med-dose').value.trim();
+    const frequency = row.querySelector('.med-frequency').value;
+    const start_date = row.querySelector('.med-start').value;
+    const stop_date = row.querySelector('.med-stop').value;
+    return {
+      medication_name,
+      dose: dose ? `${dose}mg` : null,
+      frequency: frequency || null,
+      start_date: start_date || null,
+      stop_date: stop_date || null
+    };
   }).filter(Boolean);
 }
 
@@ -1840,6 +1957,57 @@ runBtn.addEventListener('click', async () => {
     resultsBody.innerHTML = `<div class="error-box">${err.message}</div>`;
     return;
   }
+
+  // Best-effort: persist structured intake + medication records to the patient's
+  // chart via the dedicated endpoints. This is in addition to (not instead of)
+  // sending the same information as text in the /diagnose payload below, since
+  // it's not yet confirmed whether /diagnose pulls stored patient records by
+  // patient_id. If either call fails, we don't block the diagnosis itself.
+  const surgicalHistoryVal = document.getElementById('surgicalHistory').value.trim();
+  const illicitDrugUseVal = document.getElementById('illicitDrugUse').value.trim();
+  const supplementsVal = document.getElementById('supplements').value.trim();
+  const vaccinationHistoryVal = document.getElementById('vaccinationHistory').value.trim();
+  const clinicalTrialVal = document.getElementById('clinicalTrialParticipation').value.trim();
+
+  const backgroundSaves = [];
+
+  if (surgicalHistoryVal || illicitDrugUseVal || supplementsVal || vaccinationHistoryVal || clinicalTrialVal) {
+    backgroundSaves.push(
+      fetch(`${PATIENT_BASE}/${patientId}/intake`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + token
+        },
+        body: JSON.stringify({
+          procedures_surgeries: surgicalHistoryVal || null,
+          illicit_drug_use: illicitDrugUseVal || null,
+          supplements: supplementsVal || null,
+          vaccination_history: vaccinationHistoryVal || null,
+          clinical_trial_participation: clinicalTrialVal || null
+        })
+      }).catch(err => console.warn('Intake record save failed (non-blocking):', err))
+    );
+  }
+
+  const medEntries = buildMedicationEntries();
+  medEntries.forEach(entry => {
+    backgroundSaves.push(
+      fetch(`${PATIENT_BASE}/${patientId}/medication`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + token
+        },
+        body: JSON.stringify(entry)
+      }).catch(err => console.warn('Medication record save failed (non-blocking):', err))
+    );
+  });
+
+  // Wait for all background saves to settle together, rather than one at a
+  // time - this is what actually cuts the latency, since N requests now
+  // take roughly as long as the single slowest one instead of N times that.
+  await Promise.all(backgroundSaves);
 
   const payload = {
     patient_id: patientId,
@@ -1870,9 +2038,18 @@ runBtn.addEventListener('click', async () => {
 
     current_medications: buildMedicationStrings(),
     allergies: document.getElementById('allergies').value.trim() || null,
-    relevant_history: splitList(document.getElementById('history').value),
+    relevant_history: [
+      ...splitList(document.getElementById('history').value),
+      ...splitList(document.getElementById('surgicalHistory').value).map(s => `Surgical history: ${s}`)
+    ],
     family_history: document.getElementById('familyHistory').value.trim() || null,
-    social_history: document.getElementById('socialHistory').value.trim() || null,
+    social_history: [
+      document.getElementById('socialHistory').value.trim(),
+      document.getElementById('illicitDrugUse').value.trim() ? `Illicit drug use: ${document.getElementById('illicitDrugUse').value.trim()}` : '',
+      document.getElementById('supplements').value.trim() ? `Supplements: ${document.getElementById('supplements').value.trim()}` : '',
+      document.getElementById('vaccinationHistory').value.trim() ? `Vaccination history: ${document.getElementById('vaccinationHistory').value.trim()}` : '',
+      document.getElementById('clinicalTrialParticipation').value.trim() ? `Clinical trial participation: ${document.getElementById('clinicalTrialParticipation').value.trim()}` : ''
+    ].filter(Boolean).join(' · ') || null,
 
     high_acuity: document.getElementById('highAcuity').checked,
     attached_files: attachedFiles
@@ -1887,7 +2064,20 @@ runBtn.addEventListener('click', async () => {
   runBtn.textContent = 'Running…';
   statusDot.style.color = '#B8722B';
   resultsActionsWrap.innerHTML = '';
-  resultsBody.innerHTML = '<div class="spinner-line">Contacting diagnostic engine…</div>';
+
+  const progressMessages = [
+    'Contacting diagnostic engine…',
+    'Verifying medication label data…',
+    'Cross-referencing interaction risk…',
+    'Building differential diagnosis…',
+    'This can take up to a minute for complex cases…'
+  ];
+  let progressIndex = 0;
+  resultsBody.innerHTML = `<div class="spinner-line">${progressMessages[0]}</div>`;
+  const progressTimer = setInterval(() => {
+    progressIndex = Math.min(progressIndex + 1, progressMessages.length - 1);
+    resultsBody.innerHTML = `<div class="spinner-line">${progressMessages[progressIndex]}</div>`;
+  }, 8000);
 
   try {
     const res = await fetch(DIAGNOSE_ENDPOINT, {
@@ -1898,6 +2088,8 @@ runBtn.addEventListener('click', async () => {
       },
       body: JSON.stringify(payload)
     });
+
+    clearInterval(progressTimer);
 
     if (res.status === 401) {
       showAuthGate('Your session expired. Please log in again.');
@@ -1920,6 +2112,7 @@ runBtn.addEventListener('click', async () => {
     resultsBody.innerHTML = `<div class="error-box"><strong>Could not reach the diagnostic engine.</strong><br>${err.message}</div>`;
     statusDot.style.color = '#A23E3E';
   } finally {
+    clearInterval(progressTimer);
     runBtn.disabled = false;
     runBtn.textContent = 'Run differential';
   }
