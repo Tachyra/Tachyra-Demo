@@ -17,6 +17,7 @@ import anthropic
 import requests
 from dataclasses import dataclass, field
 from typing import Optional
+from json_repair import repair_json
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
@@ -345,18 +346,23 @@ def run_dx_engine(case: PatientCase, high_acuity: bool = False) -> dict:
     # stray text before/after the JSON despite instructions not to.
     cleaned = raw_text.replace("```json", "").replace("```", "").strip()
 
+
+    # This fixes the trailing comma inside the array object automatically
+    good_json_string = repair_json(cleaned)
+    data = json.loads(good_json_string)
+
     result = None
     stop_reason = getattr(response, "stop_reason", None)
     try:
-        result = json.loads(cleaned)
+        result = json.loads(data)
     except json.JSONDecodeError:
         # Fallback: extract the substring between the first '{' and the last '}'
         # in case the model added commentary around the JSON, or the output was
         # truncated mid-object (check stop_reason == "max_tokens" below).
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
+        start = data.find("{")
+        end = data.rfind("}")
         if start != -1 and end != -1 and end > start:
-            candidate = cleaned[start:end + 1]
+            candidate = data[start:end + 1]
             try:
                 result = json.loads(candidate)
             except json.JSONDecodeError:
