@@ -513,6 +513,13 @@ def run_dx_engine(case: PatientCase, high_acuity: bool = False, clinical_picture
     try:
         result = json.loads(cleaned)
     except json.JSONDecodeError:
+        try:
+            repaired = repair_json(cleaned, return_objects=True)
+            result = repaired if isinstance(repaired, dict) and repaired else None
+        except Exception:
+            result = None
+    """
+    except json.JSONDecodeError:
         # Fallback: extract the substring between the first '{' and the last '}'
         # in case the model added commentary around the JSON, or the output was
         # truncated mid-object (check stop_reason == "max_tokens" below).
@@ -524,6 +531,7 @@ def run_dx_engine(case: PatientCase, high_acuity: bool = False, clinical_picture
                 result = json.loads(candidate)
             except json.JSONDecodeError:
                 result = None
+    """
 
     if result is None:
         print(
