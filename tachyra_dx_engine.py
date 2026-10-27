@@ -17,6 +17,7 @@ import anthropic
 import requests
 from dataclasses import dataclass, field
 from typing import Optional
+from json_repair import repair_json
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
