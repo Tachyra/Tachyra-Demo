@@ -3,3 +3,4 @@ uvicorn
 anthropic
 psycopg2-binary
 requests
+json-repair
